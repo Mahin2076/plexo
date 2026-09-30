@@ -1,4 +1,10 @@
 export const IpcChannels = {
+  hostTogether: 'together:host',
+  previewTogether: 'together:preview',
+  joinTogether: 'together:join',
+  startTogether: 'together:start',
+  stopTogether: 'together:stop',
+  getTogether: 'together:get',
   listInterfaces: 'network:list-interfaces',
   pingInterfaces: 'network:ping-interfaces',
   deviceBindingSupported: 'network:device-binding-supported',

@@ -5,7 +5,6 @@ import icon from '../../resources/icon-dark.png?asset'
 import { registerIpcHandlers } from './ipc/handlers'
 import { loadThemeSource, migrateLegacyNetworkPreferences } from './settings'
 import { testKnobs } from './testKnobs'
-import type { DownloadManager } from './download/downloadManager'
 
 // In dev mode the app runs as the raw `electron` binary, which otherwise shows "Electron" in
 // the Dock tooltip/menu bar — must be set before the app is ready. Packaged builds already get
@@ -16,7 +15,7 @@ app.setName('Plexo')
 if (testKnobs.userDataDir) app.setPath('userData', testKnobs.userDataDir)
 
 let mainWindow: BrowserWindow | null = null
-let downloadManager: DownloadManager | null = null
+let downloadManager: ReturnType<typeof registerIpcHandlers> | null = null
 let quitAfterSuspending = false
 
 function createWindow(): void {

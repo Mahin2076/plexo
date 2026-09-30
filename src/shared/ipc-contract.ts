@@ -1,4 +1,10 @@
 import type {
+  HostTogetherRequest,
+  JoinTogetherRequest,
+  TogetherFile,
+  TogetherState
+} from './together'
+import type {
   AppSettings,
   DownloadUpdate,
   NetworkInterfaceInfo,
@@ -12,6 +18,12 @@ import type {
  * both plexoApi (preload) and registerIpcHandlers (main), so a signature drift between the two
  * is a compile error instead of a runtime one. */
 export interface IpcContract {
+  hostTogether: { args: [request: HostTogetherRequest]; result: TogetherState }
+  previewTogether: { args: [code: string]; result: TogetherFile }
+  joinTogether: { args: [request: JoinTogetherRequest]; result: TogetherState }
+  startTogether: { args: []; result: void }
+  stopTogether: { args: []; result: void }
+  getTogether: { args: []; result: TogetherState | null }
   listInterfaces: { args: []; result: NetworkInterfaceInfo[] }
   pingInterfaces: { args: []; result: Record<string, number | null> }
   deviceBindingSupported: { args: []; result: boolean }

@@ -67,6 +67,8 @@ File ──→ Split ─────┤                                  ├─�
 
 ## Features
 
+_New preview:_ [Download Together](docs/download-together.md) lets trusted computers on a local network contribute file pieces using separate internet connections, with join codes, helper data limits, and per-person progress.
+
 - 🚀 **Multi-interface, multi-connection downloads** — splits files into chunks of up to 8 MB and fans them out across worker connections bound to specific network interfaces, each kept open from one chunk to the next. Each interface starts with 8 connections and doubles once they are all receiving, up to 32. If the server refuses some (503, 429, 403, or leaves them unanswered), that interface drops to the ones it accepted, then gets one more back each minute without a refusal; a server refusing everything (busy, or an expired link) doesn't lower it. You can also pick a fixed 4, 8, 16 or 32 per interface on the start screen instead of Auto.
 - 🔌 **Hardware interface detection** — queries Windows adapters via PowerShell `Get-NetAdapter` and macOS hardware ports via `networksetup` so Wi-Fi, Ethernet, tethered iPhones, and Thunderbolt bridges are labeled by real device names instead of bare BSD names (`en0`, `en6`).
 - ⚖️ **Dynamic work-stealing queue** — chunks are leased from a shared pending queue; faster networks pull more chunks instead of waiting for slower connections to finish.

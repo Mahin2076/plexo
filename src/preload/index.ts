@@ -19,6 +19,14 @@ function invoke<K extends keyof IpcContract>(
 }
 
 const plexoApi = {
+  hostTogether: (request: IpcContract['hostTogether']['args'][0]) =>
+    invoke('hostTogether', request),
+  previewTogether: (code: string) => invoke('previewTogether', code),
+  joinTogether: (request: IpcContract['joinTogether']['args'][0]) =>
+    invoke('joinTogether', request),
+  startTogether: () => invoke('startTogether'),
+  stopTogether: () => invoke('stopTogether'),
+  getTogether: () => invoke('getTogether'),
   platform: process.platform,
   // Sync on purpose — see InitialState. One small read, once, before the renderer's first paint.
   initialState: ipcRenderer.sendSync(IpcChannels.getInitialState) as InitialState,
