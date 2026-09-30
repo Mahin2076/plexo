@@ -1,5 +1,6 @@
 import type { DownloadState } from '@shared/types'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import { TogetherPanel } from './components/TogetherPanel'
 import { TitleBar, type TitleBarStatus } from './components/TitleBar'
 import { NetworkBindingDialog } from './components/NetworkBindingDialog'
 import { UpdateDialog } from './components/UpdateDialog'
@@ -64,6 +65,8 @@ function renderDownload(
 }
 
 function App(): React.JSX.Element {
+  const [togetherMode, setTogetherMode] = useState(false)
+  const [togetherRunning, setTogetherRunning] = useState(false)
   useDownloadEvents()
   useNetworkEvents()
 
@@ -112,7 +115,31 @@ function App(): React.JSX.Element {
     <TooltipProvider>
       <div className="flex h-full flex-col">
         <TitleBar status={titleBarStatus} />
-        <div className="min-h-0 flex-1">{screen}</div>
+        <nav
+          className="flex gap-4 border-b border-border px-5 py-2 text-sm"
+          aria-label="Download mode"
+        >
+          <button
+            aria-pressed={!togetherMode}
+            onClick={() => setTogetherMode(false)}
+            className={!togetherMode ? 'font-semibold' : 'text-muted-foreground'}
+          >
+            Solo download
+          </button>
+          <button
+            aria-pressed={togetherMode}
+            onClick={() => setTogetherMode(true)}
+            className={togetherMode ? 'font-semibold' : 'text-muted-foreground'}
+          >
+            Download Together{togetherRunning ? ' • Active' : ''}
+          </button>
+        </nav>
+        <div className="min-h-0 flex-1" hidden={togetherMode}>
+          {screen}
+        </div>
+        <div className="min-h-0 flex-1" hidden={!togetherMode}>
+          <TogetherPanel active={togetherMode} onStatus={setTogetherRunning} />
+        </div>
         <UpdateDialog />
         <NetworkBindingDialog />
       </div>

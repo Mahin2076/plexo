@@ -21,6 +21,7 @@ import { measureLatencies } from '../network/latency'
 import { NetworkMonitor } from '../network/interfaces'
 import { loadSettings, saveSettings } from '../settings'
 import { testKnobs } from '../testKnobs'
+import { TogetherSession } from '../together/session'
 import { checkForUpdate, UPDATE_PAGE_URL } from '../updateCheck'
 
 async function openNetworkSettings(): Promise<void> {
@@ -56,7 +57,9 @@ function handle<K extends keyof IpcContract>(
 
 const DESTINATION_CHECK_MS = 300
 
-export function registerIpcHandlers(getWindow: () => BrowserWindow | null): DownloadManager {
+export function registerIpcHandlers(getWindow: () => BrowserWindow | null): {
+  suspendAll(): Promise<void>
+} {
   // The main process keeps the network list, for downloads and the window alike.
   const networks = new NetworkMonitor((list) => {
     manager.networksChanged()
@@ -64,6 +67,13 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): Down
     if (window && !window.isDestroyed()) window.webContents.send(IpcChannels.networksChanged, list)
   })
   const manager = new DownloadManager(getWindow, networks)
+  const together = new TogetherSession(networks)
+  handle('hostTogether', (_event, request) => together.host(request))
+  handle('previewTogether', (_event, code) => together.preview(code))
+  handle('joinTogether', (_event, request) => together.join(request))
+  handle('startTogether', () => together.start())
+  handle('stopTogether', () => together.stopSession())
+  handle('getTogether', () => together.snapshot())
   // Waking from sleep, the networks may have changed without a poll in between to see it.
   powerMonitor.on('resume', () => {
     manager.systemResumed()
@@ -190,5 +200,9 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): Down
     return { ...info, dismissed: info.version === dismissedUpdateVersion }
   })
 
-  return manager
+  return {
+    suspendAll: async () => {
+      await Promise.allSettled([manager.suspendAll(), together.stopSession()])
+    }
+  }
 }
