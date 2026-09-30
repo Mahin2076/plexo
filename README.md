@@ -395,7 +395,3 @@ If Plexo is useful to you, you can support it by:
 - ❤️ [Sponsoring development](https://github.com/sponsors/anmolkapil)
 
 ---
-
-# License
-
-MIT — see [LICENSE](LICENSE).
