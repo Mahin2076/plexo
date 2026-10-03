@@ -16,6 +16,7 @@ import type { InitialState, ThemeSource } from '../../shared/types'
 import { DownloadManager } from '../download/downloadManager'
 import { getDefaultDownloadsDir, getHomeDir } from '../download/paths'
 import { probeUrl } from '../download/probe'
+import { JoinManager } from '../join/joinManager'
 import { deviceBindingSupported } from '../network/deviceBinding'
 import { measureLatencies } from '../network/latency'
 import { NetworkMonitor } from '../network/interfaces'
@@ -56,14 +57,27 @@ function handle<K extends keyof IpcContract>(
 
 const DESTINATION_CHECK_MS = 300
 
-export function registerIpcHandlers(getWindow: () => BrowserWindow | null): DownloadManager {
-  // The main process keeps the network list, for downloads and the window alike.
+/** The managers the app's lifecycle needs a hold of (see main/index.ts's before-quit). */
+export interface Managers {
+  downloadManager: DownloadManager
+  joinManager: JoinManager
+}
+
+export function registerIpcHandlers(getWindow: () => BrowserWindow | null): Managers {
+  const send = (channel: string, payload: unknown): void => {
+    const window = getWindow()
+    if (window && !window.isDestroyed()) window.webContents.send(channel, payload)
+  }
+  // The main process keeps the network list, for downloads, join links and the window alike.
   const networks = new NetworkMonitor((list) => {
     manager.networksChanged()
-    const window = getWindow()
-    if (window && !window.isDestroyed()) window.webContents.send(IpcChannels.networksChanged, list)
+    joinManager.networksChanged()
+    send(IpcChannels.networksChanged, list)
   })
   const manager = new DownloadManager(getWindow, networks)
+  const joinManager = new JoinManager(networks, (state) =>
+    send(IpcChannels.joinStateChanged, state)
+  )
   // Waking from sleep, the networks may have changed without a poll in between to see it.
   powerMonitor.on('resume', () => {
     manager.systemResumed()
@@ -190,5 +204,15 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): Down
     return { ...info, dismissed: info.version === dismissedUpdateVersion }
   })
 
-  return manager
+  handle('startJoinSession', async () => joinManager.start())
+
+  handle('stopJoinSession', async () => joinManager.stop())
+
+  handle('getJoinState', async () => joinManager.getState())
+
+  handle('removeJoinedDevice', async (_event, deviceId) => {
+    joinManager.removeDevice(deviceId)
+  })
+
+  return { downloadManager: manager, joinManager }
 }

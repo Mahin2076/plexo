@@ -5,6 +5,7 @@ import type {
   AppSettings,
   DownloadUpdate,
   InitialState,
+  JoinState,
   NetworkInterfaceInfo
 } from '../shared/types'
 
@@ -42,6 +43,10 @@ const plexoApi = {
   cancelDownload: (downloadId: string) => invoke('cancelDownload', downloadId),
   removeDownload: (downloadId: string) => invoke('removeDownload', downloadId),
   checkForUpdate: () => invoke('checkForUpdate'),
+  startJoinSession: () => invoke('startJoinSession'),
+  stopJoinSession: () => invoke('stopJoinSession'),
+  getJoinState: () => invoke('getJoinState'),
+  removeJoinedDevice: (deviceId: string) => invoke('removeJoinedDevice', deviceId),
 
   onDownloadUpdated: (callback: (update: DownloadUpdate) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, update: DownloadUpdate): void => callback(update)
@@ -54,6 +59,14 @@ const plexoApi = {
       callback(networks)
     ipcRenderer.on(IpcChannels.networksChanged, listener)
     return () => ipcRenderer.removeListener(IpcChannels.networksChanged, listener)
+  },
+
+  /** Every change to the join state: a session opened, the phone reaching a new phase, a report
+   * landing, a device removed. Each push carries the whole state. */
+  onJoinStateChanged: (callback: (state: JoinState) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, state: JoinState): void => callback(state)
+    ipcRenderer.on(IpcChannels.joinStateChanged, listener)
+    return () => ipcRenderer.removeListener(IpcChannels.joinStateChanged, listener)
   }
 }
 

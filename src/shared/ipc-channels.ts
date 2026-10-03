@@ -18,5 +18,10 @@ export const IpcChannels = {
   removeDownload: 'download:remove',
   downloadUpdated: 'download:updated',
   networksChanged: 'network:changed',
-  checkForUpdate: 'update:check'
+  checkForUpdate: 'update:check',
+  startJoinSession: 'join:start',
+  stopJoinSession: 'join:stop',
+  getJoinState: 'join:get-state',
+  removeJoinedDevice: 'join:remove-device',
+  joinStateChanged: 'join:changed'
 } as const

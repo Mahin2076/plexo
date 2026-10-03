@@ -212,3 +212,79 @@ export interface StartDownloadRequest {
   /** Streams per network the user picked; left out, the count is decided automatically. */
   streamsPerNetwork?: number
 }
+
+// ---- Join: a phone that scanned the QR code and reported what its network can do ----
+
+/** Where a join session is, from this computer's side: waiting for the phone to open the link,
+ * the phone has opened it and is measuring, or it has reported (`done`). A link nobody opens in
+ * time expires. */
+export type JoinSessionStatus = 'waiting' | 'testing' | 'done' | 'expired'
+
+/** What the phone is measuring right now, in the order it measures them. */
+export type SpeedTestPhase = 'latency' | 'download' | 'upload'
+
+/** One address the phone can reach this computer at. A session carries one per network this
+ * computer is on, since the phone can only be on one of them. */
+export interface JoinUrl {
+  /** A NetworkInterfaceInfo id. */
+  interfaceId: string
+  /** The network's display name, for picking which link to show. */
+  label: string
+  /** What the QR code encodes: http://<address>:<port>/join?t=<token>. */
+  url: string
+}
+
+export interface JoinSession {
+  id: string
+  status: JoinSessionStatus
+  urls: JoinUrl[]
+  createdAt: number
+  expiresAt: number
+  /** While `testing`: the phase the phone last said it was in. */
+  phase?: SpeedTestPhase
+  /** Once `done`: the id of the JoinedDevice it produced. */
+  deviceId?: string
+  /** Why it isn't `done` when it should be — e.g. the phone sent a report that didn't parse. */
+  error?: string
+}
+
+/** What the phone measured. Internet figures are null when the phone couldn't reach the probe
+ * (no data, or the probe blocked). Link figures are between the phone and this computer, over
+ * the network it joined on, and are always present. Speeds are in bytes per second. */
+export interface SpeedTestResult {
+  internetLatencyMs: number | null
+  internetDownloadBps: number | null
+  internetUploadBps: number | null
+  linkLatencyMs: number
+  linkDownloadBps: number
+  linkUploadBps: number
+  /** When this computer received the report. */
+  measuredAt: number
+  /** How long the phone spent measuring. */
+  durationMs: number
+}
+
+export type JoinedDevicePlatform = 'ios' | 'android' | 'other'
+
+export interface JoinedDevice {
+  id: string
+  /** From the browser's user agent: "iPhone", "Android phone", "Phone". */
+  name: string
+  platform: JoinedDevicePlatform
+  /** What the phone's browser said about its connection (the Network Information API's
+   * effectiveType, e.g. "4g"), when it said anything. */
+  connectionType?: string
+  /** The address the phone connected from. */
+  address: string
+  /** The network of this computer it came in on (a NetworkInterfaceInfo id), when known. */
+  viaInterfaceId?: string
+  joinedAt: number
+  capability: SpeedTestResult
+}
+
+/** Everything the window shows about joining: the session the QR code is for (null when none
+ * is open), and every phone that has reported so far this run. */
+export interface JoinState {
+  session: JoinSession | null
+  devices: JoinedDevice[]
+}

@@ -6,6 +6,7 @@ import { registerIpcHandlers } from './ipc/handlers'
 import { loadThemeSource, migrateLegacyNetworkPreferences } from './settings'
 import { testKnobs } from './testKnobs'
 import type { DownloadManager } from './download/downloadManager'
+import type { JoinManager } from './join/joinManager'
 
 // In dev mode the app runs as the raw `electron` binary, which otherwise shows "Electron" in
 // the Dock tooltip/menu bar — must be set before the app is ready. Packaged builds already get
@@ -17,6 +18,7 @@ if (testKnobs.userDataDir) app.setPath('userData', testKnobs.userDataDir)
 
 let mainWindow: BrowserWindow | null = null
 let downloadManager: DownloadManager | null = null
+let joinManager: JoinManager | null = null
 let quitAfterSuspending = false
 
 function createWindow(): void {
@@ -84,7 +86,9 @@ app.whenReady().then(async () => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  downloadManager = registerIpcHandlers(() => mainWindow)
+  const managers = registerIpcHandlers(() => mainWindow)
+  downloadManager = managers.downloadManager
+  joinManager = managers.joinManager
 
   nativeTheme.on('updated', () => {
     mainWindow?.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1c1e' : '#ffffff')
@@ -108,11 +112,20 @@ app.on('before-quit', (event) => {
     app.exit(0)
   }, 3000)
 
-  void downloadManager.suspendAll().finally(() => {
-    clearTimeout(forceQuitTimeout)
-    quitAfterSuspending = true
-    app.exit(0)
-  })
+  // The join server goes too: a phone mid-download would otherwise hold its socket open. Either
+  // failing is logged, not fatal — the app is leaving regardless.
+  void Promise.allSettled([downloadManager.suspendAll(), joinManager?.shutdown()]).then(
+    (results) => {
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          console.error('[plexo] failed to wind down before quit', result.reason)
+        }
+      }
+      clearTimeout(forceQuitTimeout)
+      quitAfterSuspending = true
+      app.exit(0)
+    }
+  )
 })
 
 app.on('window-all-closed', () => {

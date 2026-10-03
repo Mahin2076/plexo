@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   DownloadUpdate,
+  JoinState,
   NetworkInterfaceInfo,
   ProbeResult,
   StartDownloadRequest,
@@ -8,9 +9,9 @@ import type {
 } from './types'
 
 /** The request/response half of the IPC surface (every IpcChannels entry except the
- * main->renderer push events, downloadUpdated and networksChanged) — one source of truth for
- * both plexoApi (preload) and registerIpcHandlers (main), so a signature drift between the two
- * is a compile error instead of a runtime one. */
+ * main->renderer push events, downloadUpdated, networksChanged and joinStateChanged) — one
+ * source of truth for both plexoApi (preload) and registerIpcHandlers (main), so a signature
+ * drift between the two is a compile error instead of a runtime one. */
 export interface IpcContract {
   listInterfaces: { args: []; result: NetworkInterfaceInfo[] }
   pingInterfaces: { args: []; result: Record<string, number | null> }
@@ -29,4 +30,11 @@ export interface IpcContract {
   cancelDownload: { args: [id: string]; result: void }
   removeDownload: { args: [id: string]; result: void }
   checkForUpdate: { args: []; result: UpdateInfo | null }
+  /** Opens a join session: starts the join server if it isn't running, mints a fresh link, and
+   * returns the state with that session. Replaces any session still open. */
+  startJoinSession: { args: []; result: JoinState }
+  /** Closes the open session (its link stops working). Joined devices are kept. */
+  stopJoinSession: { args: []; result: void }
+  getJoinState: { args: []; result: JoinState }
+  removeJoinedDevice: { args: [deviceId: string]; result: void }
 }

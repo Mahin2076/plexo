@@ -1,10 +1,12 @@
 import type { DownloadState } from '@shared/types'
 import { useEffect } from 'react'
 import { TitleBar, type TitleBarStatus } from './components/TitleBar'
+import { JoinDialog } from './components/JoinDialog'
 import { NetworkBindingDialog } from './components/NetworkBindingDialog'
 import { UpdateDialog } from './components/UpdateDialog'
 import { TooltipProvider } from './components/ui/tooltip'
 import { useDownloadEvents } from './hooks/useDownloadEvents'
+import { useJoinEvents } from './hooks/useJoin'
 import { useNetworkEvents } from './hooks/useNetworks'
 import { CompleteScreen } from './screens/CompleteScreen'
 import { DownloadingScreen } from './screens/DownloadingScreen'
@@ -66,6 +68,7 @@ function renderDownload(
 function App(): React.JSX.Element {
   useDownloadEvents()
   useNetworkEvents()
+  useJoinEvents()
 
   const interfaces = useAppStore((store) => store.interfaces)
   const interfacesStatus = useAppStore((store) => store.interfacesStatus)
@@ -114,6 +117,7 @@ function App(): React.JSX.Element {
         <TitleBar status={titleBarStatus} />
         <div className="min-h-0 flex-1">{screen}</div>
         <UpdateDialog />
+        <JoinDialog />
         <NetworkBindingDialog />
       </div>
     </TooltipProvider>

@@ -28,7 +28,19 @@ export const testKnobs = {
   hedgeAfterMs: positiveNumber('PLEXO_E2E_HEDGE_MS', 2_000),
   /** Skips the real GitHub check and pretends this version is available, for exercising the
    * update banner without needing an actual newer release published. */
-  forceUpdateVersion: env['PLEXO_FORCE_UPDATE_VERSION']
+  forceUpdateVersion: env['PLEXO_FORCE_UPDATE_VERSION'],
+  /** The port the join server listens on; 0 lets the OS pick a free one. */
+  joinPort: positiveNumber('PLEXO_E2E_JOIN_PORT', 0),
+  /** The address the join server binds; every address (so a phone on any network reaches it)
+   * unless a test wants it on loopback only. */
+  joinHost: env['PLEXO_E2E_JOIN_HOST'],
+  /** How long a join link stays valid once shown. */
+  joinSessionTtlMs: positiveNumber('PLEXO_E2E_JOIN_TTL_MS', 10 * 60_000),
+  /** Where the phone measures its internet speed. Unset: Cloudflare's speed test endpoints.
+   * `self`: the join server's own endpoints (so a test measures something without the
+   * internet). `none`: skip the internet measurement. Any other value: an origin that serves
+   * Cloudflare's `/__down?bytes=` and `/__up` paths. */
+  speedTestOrigin: env['PLEXO_E2E_SPEEDTEST_ORIGIN']
 }
 
 /** `PLEXO_E2E_STREAMS=2` fixes how many streams each network runs and turns the automatic

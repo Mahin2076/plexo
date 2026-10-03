@@ -82,6 +82,7 @@ File ──→ Split ─────┤                                  ├─�
 - 📊 **Real-time telemetry** — live throughput graphs, rolling-window ETA calculation, and per-connection transfer stats.
 - 🗺️ **Interactive progress grid** — 1:1 visual map of individual chunks, color-coded by the network interface that fetched each chunk with accurate per-network byte attribution.
 - 🎨 **Network customization** — rename and recolor physical network interfaces with persistent user preferences.
+- 📱 **Join a phone** — scan a QR code from the start screen and the phone runs a quick speed test (latency, download, upload) both to the internet and to this computer, then reports what its connection can do. Nothing to install: the page is served by Plexo over your LAN, behind a per-session token, only while the dialog is open.
 - 🌓 **Light & Dark modes** — full theme support with an instant toggle between light and dark modes.
 
 ---
@@ -218,6 +219,46 @@ Active Streams:
 Progress Grid:
 [#1][#2][#3][#4][#5][#6][#7][#8]...
 ```
+
+---
+
+# Join a phone
+
+A phone on the same network as your computer can tell Plexo what its own connection is capable of, with nothing to install. This is step 1 of letting a phone contribute its connection: before Plexo can use that link, it needs to know what it can do.
+
+On the start screen, the **Connected Networks** header has a **Join a phone** button. It opens a dialog with a QR code:
+
+1. Plexo starts a small HTTP server on the computer's own LAN address, on a random port. If the computer is on more than one network there is one join link per network (Wi-Fi first) and a picker to choose between them.
+2. The QR encodes `http://<ip>:<port>/join?t=<token>`, where the token is 32 random bytes. The link is valid for 10 minutes and dies when the dialog is closed.
+3. Scanning it opens a page served by Plexo. The page runs a speed test of about 6–10 seconds and POSTs the result back. The desktop dialog follows along (Waiting → Measuring latency → download → upload → done).
+
+```text
+Desktop                                   Phone
+Join a phone ─────── QR code ──────────▶ http://<ip>:<port>/join?t=<token>
+                                            │
+                                            ├── ping / down / up ──▶ internet (speed.cloudflare.com)
+                                            ├── ping / down / up ──▶ this computer
+                                            │
+Joined Phones ◀───── POST result ───────────┘
+```
+
+### What the phone measures
+
+| Metric   | To the internet                                                      | To this computer                                         |
+| -------- | -------------------------------------------------------------------- | -------------------------------------------------------- |
+| Latency  | median of 5 pings to Cloudflare's public speed-test endpoints        | median of 5 pings to Plexo over the network it joined on |
+| Download | streamed from `speed.cloudflare.com/__down`, capped at a few seconds | streamed from Plexo, capped at a few seconds             |
+| Upload   | POSTed to `speed.cloudflare.com/__up`                                | POSTed to Plexo                                          |
+
+The download is capped at a few seconds so even a slow link produces a number. Once the result lands, the phone appears under **Joined Phones** with its down / up / ping, the connection type its browser reported (e.g. 4G), the address it came from, and which of the computer's networks it came in on. Figures are kept for the current run of the app; they are not persisted.
+
+### Privacy & security
+
+- The server only runs while the dialog is open.
+- Every request needs the session token.
+- The page ships a strict CSP: nonce'd inline script and style, with `connect-src` limited to the Plexo host and the speed-test origin.
+- Upload and download test bodies are capped at 64 MiB.
+- Nothing about the phone leaves the computer except the speed-test traffic to Cloudflare.
 
 ---
 

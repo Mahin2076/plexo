@@ -3,6 +3,7 @@ import type {
   AppSettings,
   DownloadState,
   DownloadUpdate,
+  JoinState,
   NetworkInterfaceInfo,
   NetworkPreference,
   NetworkPreferences,
@@ -10,6 +11,7 @@ import type {
   UpdateInfo
 } from '@shared/types'
 import { create } from 'zustand'
+import { describeError } from '../utils/format'
 
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -53,6 +55,14 @@ interface AppStore {
   /** Persisted — the last folder picked, falling back to downloadsDir. */
   destinationDir: string
 
+  /** The QR-code session and every phone that has joined — mirrored from the main process,
+   * which pushes the whole thing on every change. */
+  joinState: JoinState
+  joinDialogOpen: boolean
+  /** Why the last attempt to open a session failed (e.g. no network a phone could reach this
+   * computer on) — shown in the dialog in place of the QR code. */
+  joinError: string | null
+
   /** Asks the main process for the network list now; it also pushes every change. */
   loadInterfaces: () => Promise<void>
   receiveInterfaces: (interfaces: NetworkInterfaceInfo[]) => void
@@ -66,6 +76,15 @@ interface AppStore {
   clearCurrentDownload: () => void
   setDraftUrl: (url: string) => void
   setDestinationDir: (dir: string) => void
+
+  receiveJoinState: (state: JoinState) => void
+  /** Shows the dialog and asks the main process for a fresh session (a new QR code). */
+  openJoinDialog: () => Promise<void>
+  /** Hides the dialog and ends the session, so the code on screen stops working. */
+  closeJoinDialog: () => Promise<void>
+  /** A new code once the last one was used or expired, with the dialog staying open. */
+  restartJoinSession: () => Promise<void>
+  removeJoinedDevice: (deviceId: string) => void
 }
 
 // Settings saved by the main process, read once before the first paint (see InitialState).
@@ -97,6 +116,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   draftUrl: '',
   destinationDir: initial.destinationDir ?? initial.downloadsDir,
+
+  joinState: { session: null, devices: [] },
+  joinDialogOpen: false,
+  joinError: null,
 
   loadInterfaces: async () => {
     // A re-scan keeps showing the last result rather than flashing back to 'loading'.
@@ -201,5 +224,51 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setDestinationDir: (destinationDir) => {
     set({ destinationDir })
     persist({ destinationDir })
+  },
+
+  receiveJoinState: (joinState) => set({ joinState }),
+
+  openJoinDialog: async () => {
+    set({ joinDialogOpen: true })
+    await get().restartJoinSession()
+  },
+
+  closeJoinDialog: async () => {
+    set({ joinDialogOpen: false, joinError: null })
+    try {
+      await window.plexo.stopJoinSession()
+    } catch {
+      // Best-effort: the session expires on its own, and the main process pushes that too.
+    }
+  },
+
+  restartJoinSession: async () => {
+    // The old code is gone either way; dropping it now means the dialog shows "starting" rather
+    // than a stale done/expired session until the new one lands.
+    set({ joinError: null, joinState: { ...get().joinState, session: null } })
+    try {
+      const joinState = await window.plexo.startJoinSession()
+      if (!get().joinDialogOpen) {
+        // Closed while the session was being opened — the stop that close sent may have run
+        // before this session existed, so stop again rather than leave a live code behind.
+        window.plexo.stopJoinSession().catch(() => {})
+        return
+      }
+      set({ joinState })
+    } catch (error) {
+      set({ joinError: describeError(error) })
+    }
+  },
+
+  removeJoinedDevice: (deviceId) => {
+    const { joinState } = get()
+    // Optimistic: the card goes right away, and the main process confirms with its next push.
+    set({
+      joinState: {
+        ...joinState,
+        devices: joinState.devices.filter((device) => device.id !== deviceId)
+      }
+    })
+    window.plexo.removeJoinedDevice(deviceId).catch(() => {})
   }
 }))

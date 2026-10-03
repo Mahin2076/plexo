@@ -180,3 +180,34 @@ export function describeError(error: unknown): string {
 
   return stripped
 }
+
+const BITRATE_UNITS = ['bps', 'Kbps', 'Mbps', 'Gbps']
+
+/** Rounded the way the readout shows it: one decimal under 100 (so 12.4 Mbps keeps its tenth,
+ * where 850 Kbps and 1.2 Gbps are read at a glance), a whole number above. */
+function roundBitrate(value: number, unit: number): number {
+  return unit > 0 && value < 100 ? Math.round(value * 10) / 10 : Math.round(value)
+}
+
+/** A speed as a network would advertise it — in bits, decimal units: "850 Kbps", "12.4 Mbps",
+ * "1.2 Gbps". Download readouts elsewhere stay in bytes; this is for a phone's link, which the
+ * user compares against the plan they pay for. */
+export function formatBitrate(bytesPerSec: number): string {
+  if (!Number.isFinite(bytesPerSec) || bytesPerSec <= 0) return '0 bps'
+  let bits = bytesPerSec * 8
+  let unit = 0
+  // Checked on the rounded figure so 999.96 Kbps reads "1.0 Mbps", not "1000 Kbps".
+  while (unit < BITRATE_UNITS.length - 1 && roundBitrate(bits, unit) >= 1000) {
+    bits /= 1000
+    unit += 1
+  }
+  const rounded = roundBitrate(bits, unit)
+  const text = unit > 0 && rounded < 100 ? rounded.toFixed(1) : String(rounded)
+  return `${text} ${BITRATE_UNITS[unit]}`
+}
+
+/** "24 ms". */
+export function formatLatency(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '—'
+  return `${Math.round(ms)} ms`
+}
