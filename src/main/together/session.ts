@@ -16,6 +16,7 @@ import type { NetworkInterfaceInfo } from '../../shared/types'
 import { DownloadFile } from '../download/downloadFile'
 import { reserveDestinationPath } from '../download/paths'
 import { probeUrl } from '../download/probe'
+import { ChunkScheduler } from './scheduler'
 import {
   callPeer,
   CHUNK_BYTES,
@@ -36,9 +37,14 @@ type Block = {
   end: number
   done: boolean
   failures: number
-  lease?: TogetherLease & { owner: string; expires: number; writing: boolean }
+  lease?: TogetherLease & { owner: string; expires: number; writing: boolean; started: number }
 }
-type Peer = TogetherPeer & { lastSeen: number; retryAfter?: number }
+type Peer = TogetherPeer & {
+  lastSeen: number
+  retryAfter?: number
+  remaining?: number
+  lastPoll?: number
+}
 type Assignment = { status: TogetherState['status']; lease: TogetherLease | null; bytes: number }
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error))
@@ -60,11 +66,15 @@ export class TogetherSession {
   private busy = false
   private expiry?: NodeJS.Timeout
   private helper?: { code: string; peer: string }
+  private scheduler = new ChunkScheduler()
+  private metrics = new Map<string, { bytesPerSecond: number; failures: number }>()
+  private preferred?: { owner: string; since: number }
 
   constructor(private readonly networks: Networks) {}
 
   snapshot(): TogetherState | null {
     if (this.state?.role === 'host') {
+      this.state.scheduler = { ...this.scheduler.status }
       this.state.peers = [...this.peers.values()].map(({ name, bytes, status, lastSeen }) => ({
         name,
         bytes,
@@ -133,6 +143,9 @@ export class TogetherSession {
         })
       )
       this.peers.clear()
+      this.scheduler = new ChunkScheduler()
+      this.metrics.clear()
+      this.preferred = undefined
       const token = randomBytes(16).toString('hex')
       this.state = {
         role: 'host',
@@ -232,6 +245,7 @@ export class TogetherSession {
       if (block.lease && !block.lease.writing && block.lease.expires <= now) {
         const peer = this.peers.get(block.lease.owner)
         if (peer) peer.retryAfter = now + LEASE_MS
+        this.recordFailure(block.lease.owner)
         block.lease = undefined
       }
     }
@@ -244,6 +258,35 @@ export class TogetherSession {
     )
     if (index < 0) return null
     const block = this.blocks[index]
+    const bytes = block.end - block.start + 1
+    const roster = [
+      { id: 'host', remainingBytes: this.state!.file.totalBytes - this.state!.bytes },
+      ...[...this.peers.entries()]
+        .filter(
+          ([, peer]) =>
+            peer.status !== 'left' &&
+            now - peer.lastSeen < LEASE_MS &&
+            (peer.retryAfter ?? 0) <= now &&
+            (peer.remaining ?? 0) >= bytes
+        )
+        .map(([id, peer]) => ({ id, remainingBytes: peer.remaining! }))
+    ].map((device) => ({
+      ...device,
+      ...(this.metrics.get(device.id) ?? { bytesPerSecond: 0, failures: 0 })
+    }))
+    const order = this.scheduler.rank(roster, this.stop.signal)
+    const preferred = order.find(
+      (id) =>
+        !this.blocks.some((item) => item.lease?.owner === id) &&
+        (id === 'host' || now - (this.peers.get(id)?.lastPoll ?? 0) < 1_000)
+    )
+    // Give the chosen idle device one polling interval to claim. A vanished device cannot
+    // stall the download, and a working device never prevents others receiving chunks.
+    if (preferred && preferred !== owner) {
+      if (this.preferred?.owner !== preferred) this.preferred = { owner: preferred, since: now }
+      if (now - this.preferred.since < 500) return null
+    }
+    this.preferred = undefined
     const lease = {
       id: randomUUID(),
       index,
@@ -251,10 +294,17 @@ export class TogetherSession {
       end: block.end,
       owner,
       expires: now + LEASE_MS,
-      writing: false
+      writing: false,
+      started: now
     }
     block.lease = lease
     return lease
+  }
+
+  private recordFailure(owner: string): void {
+    const metrics = this.metrics.get(owner) ?? { bytesPerSecond: 0, failures: 0 }
+    metrics.failures++
+    this.metrics.set(owner, metrics)
   }
 
   private async accept(owner: string, lease: TogetherLease, bytes: Buffer): Promise<void> {
@@ -290,6 +340,12 @@ export class TogetherSession {
         await handle.close()
       }
       block.done = true
+      const metrics = this.metrics.get(owner) ?? { bytesPerSecond: 0, failures: 0 }
+      const speed = (bytes.length * 1000) / Math.max(1, Date.now() - block.lease!.started)
+      metrics.bytesPerSecond = metrics.bytesPerSecond
+        ? metrics.bytesPerSecond * 0.7 + speed * 0.3
+        : speed
+      this.metrics.set(owner, metrics)
       block.lease = undefined
       this.state.bytes += bytes.length
       if (owner === 'host') this.state.contributedBytes += bytes.length
@@ -358,6 +414,8 @@ export class TogetherSession {
       const body = JSON.parse((await readBody(req, 1024)).toString())
       if (!Number.isSafeInteger(body.remaining) || body.remaining < 0)
         throw new Error('Invalid remaining budget')
+      peer.remaining = body.remaining
+      peer.lastPoll = Date.now()
       const lease = state.status === 'downloading' ? this.claim(peerId, body.remaining) : null
       peer.status = lease ? 'working' : 'connected'
       json(res, {
@@ -375,6 +433,7 @@ export class TogetherSession {
       )
       // Idempotent: a delayed failure must never release a replacement lease or an active write.
       if (block?.lease && !block.lease.writing) {
+        this.recordFailure(peerId)
         block.lease = undefined
         peer.retryAfter = Date.now() + LEASE_MS
         peer.status = 'connected'
@@ -425,6 +484,7 @@ export class TogetherSession {
         await this.accept('host', lease, bytes)
       } catch (error) {
         const block = this.blocks[lease.index]
+        this.recordFailure('host')
         if (block.lease?.id === lease.id) block.lease = undefined
         if (signal.aborted || ++block.failures >= 3) throw error
         await delay(500, undefined, { signal })

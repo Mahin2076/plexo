@@ -146,6 +146,13 @@ export function TogetherPanel({
                 extra.
               </p>
             )}
+            {session.scheduler && (
+              <p className="text-xs text-muted-foreground" data-testid="together-scheduler">
+                {session.scheduler.mode === 'gemma' ? 'Gemma scheduling' : 'Automatic fallback'}
+                {' · '}
+                {session.scheduler.detail}
+              </p>
+            )}
             {session.peers.map((peer, index) => (
               <p className="flex justify-between text-sm" key={index}>
                 <span>

@@ -15,6 +15,11 @@ export interface TogetherPeer {
   status: 'connected' | 'working' | 'left'
 }
 
+export interface TogetherScheduler {
+  mode: 'gemma' | 'fallback'
+  detail: string
+}
+
 export interface TogetherState {
   role: 'host' | 'helper'
   status: 'waiting' | 'downloading' | 'verifying' | 'completed' | 'stopped' | 'error'
@@ -26,6 +31,7 @@ export interface TogetherState {
   usedBytes: number
   budgetBytes?: number
   peers: TogetherPeer[]
+  scheduler?: TogetherScheduler
   destinationPath?: string
   sha256?: string
   error?: string

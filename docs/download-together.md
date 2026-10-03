@@ -59,3 +59,26 @@ Parse the join code as `plexo://HOST:PORT/TOKEN` and connect to `http://HOST:POR
 7. `POST /leave` with JSON `{}` when done helping or canceled. This immediately releases unfinished assignments. If the phone disappears without reporting failure, its lease expires after 45 seconds. Expired helpers also receive a cooldown when the expired lease is reclaimed, preventing a slow participant from immediately taking it back.
 
 Keep one chunk in memory at a time (at most 1 MiB). Source and relay requests have 30-second deadlines in the desktop client. If an upload response is lost, a later failure report cannot undo an already accepted chunk; contribution accounting remains authoritative on the host. Plain HTTP is for trusted local networks only. Real phone testing and a native phone UI are still required before claiming mobile end-to-end support.
+
+## Gemma 4 device assignment
+
+The host now uses a local Gemma 4 model to rank devices for chunk assignment. It sends measured end-to-end speed (source download plus relay and write), failure counts, and remaining payload allowance. Faster, reliable devices can receive higher priority; failed or expired leases still return to the coordinator for reassignment. Native phone clients use the same protocol above; they do not need to run a model.
+
+Install a current [Ollama](https://ollama.com) release, then run:
+
+```bash
+ollama serve
+# In another terminal:
+ollama pull gemma4:e2b
+ollama run gemma4:e2b
+# Exit the chat, leaving the Ollama server running, then launch Plexo:
+npm run dev
+```
+
+The default is [`gemma4:e2b`](https://ollama.com/library/gemma4) at `http://127.0.0.1:11434`. To use another locally installed Gemma 4 size or local port, launch the host with `PLEXO_GEMMA_MODEL` and/or `PLEXO_OLLAMA_URL` set. Only loopback HTTP endpoints are accepted. Model downloads are separate from Plexo and require disk space and memory. The host progress card shows **Gemma scheduling** after a validated decision, or **Automatic fallback** when Gemma is unavailable, slow, or returns invalid priorities.
+
+Inference runs in the background, at most one request at a time, with refreshes no more often than every five seconds for an unchanged device roster. Decisions expire after 15 seconds, and roster changes invalidate them. The model returns a complete device priority order using [Ollama structured output](https://ollama.com/blog/structured-outputs); Plexo validates it independently. The prompt contains generated aliases and numbers, never source URLs, file contents, device names, join tokens, or peer credentials.
+
+Priority selects the next idle, recently polling device when participants compete for chunks. Every participant still has at most one active lease; busy devices cannot block other participants. A selected device has up to 500 ms to poll before another requester can take the work. This is a device-priority scheduler, not a model call for every byte range. Available devices can work concurrently, and small downloads may finish before the first inference. When there is no usable decision, Plexo orders devices by measured speed divided by one plus recorded failures. Budget checks, cooldowns, fixed-offset writes, checksums, and lease ownership remain enforced outside the model.
+
+Automated verification uses a controlled local model endpoint to prove that model priorities change actual lease ownership, a failed chosen helper's chunk is reassigned, and the final file hash matches. These tests do not establish real Gemma latency, a speed improvement, or native-phone end-to-end support. Test your installed model and physical network separately before making those claims.

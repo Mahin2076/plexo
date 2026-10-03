@@ -1,10 +1,101 @@
 import { readFile, readdir } from 'node:fs/promises'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { test, expect, makeDirs, PlexoApp, LAN_ADDRESS } from './fixtures'
 import { sha256 } from './origin'
 import { callPeer, hash } from '../src/main/together/transport'
 import type { TogetherLease } from '../src/shared/together'
 
 const MiB = 1024 * 1024
+
+test('Together: Gemma chooses the helper, then failure reassigns and assembles the exact file', async ({
+  plexo,
+  serve
+}) => {
+  let modelRequests = 0
+  const model = createServer(async (req, res) => {
+    let body = ''
+    for await (const part of req) body += part.toString()
+    const prompt = JSON.parse(body)
+    const devices = JSON.parse(prompt.messages[1].content) as { id: string }[]
+    modelRequests++
+    res.setHeader('Content-Type', 'application/json')
+    res.end(
+      JSON.stringify({
+        message: {
+          content: JSON.stringify({ priority: devices.map((device) => device.id).reverse() })
+        }
+      })
+    )
+  })
+  await new Promise<void>((resolve) => model.listen(0, '127.0.0.1', resolve))
+  try {
+    await plexo.evaluateMain(
+      (_electron, endpoint) => {
+        process.env.PLEXO_OLLAMA_URL = endpoint
+      },
+      `http://127.0.0.1:${(model.address() as AddressInfo).port}`
+    )
+    const origin = await serve({ size: 3 * MiB, bytesPerSecond: MiB / 2 })
+    const code = await host(plexo, origin.url())
+    const a = await callPeer<{ peer: string }>(code, '/join', { name: 'Phone A' })
+    const b = await callPeer<{ peer: string }>(code, '/join', { name: 'Phone B' })
+    const headersA = { 'X-Plexo-Peer': a.peer }
+    const headersB = { 'X-Plexo-Peer': b.peer }
+    await callPeer(code, '/lease', { remaining: 10 * MiB }, undefined, headersA)
+    await callPeer(code, '/lease', { remaining: 10 * MiB }, undefined, headersB)
+    await plexo.api.startTogether()
+    await expect
+      .poll(async () => (await plexo.api.getTogether())?.scheduler?.mode, {
+        intervals: [20],
+        timeout: 1000
+      })
+      .toBe('gemma')
+    const refused = await callPeer<{ lease: TogetherLease | null }>(
+      code,
+      '/lease',
+      { remaining: 10 * MiB },
+      undefined,
+      headersA
+    )
+    expect(refused.lease).toBeNull()
+    const chosen = await callPeer<{ lease: TogetherLease }>(
+      code,
+      '/lease',
+      { remaining: 10 * MiB },
+      undefined,
+      headersB
+    )
+    expect(chosen.lease).toBeTruthy()
+    await plexo.page.getByRole('button', { name: 'Download Together', exact: true }).click()
+    await expect(plexo.page.getByTestId('together-scheduler')).toContainText('Gemma scheduling')
+    await callPeer(code, '/failed', { id: chosen.lease.id }, undefined, headersB)
+    const replacement = await callPeer<{ lease: TogetherLease }>(
+      code,
+      '/lease',
+      { remaining: 10 * MiB },
+      undefined,
+      headersA
+    )
+    expect(replacement.lease.index).toBe(chosen.lease.index)
+    expect(replacement.lease.id).not.toBe(chosen.lease.id)
+    const bytes = origin.content.subarray(replacement.lease.start, replacement.lease.end + 1)
+    await callPeer(code, '/chunk', bytes, undefined, {
+      ...headersA,
+      'X-Plexo-Lease': replacement.lease.id,
+      'X-Plexo-Sha256': hash(bytes)
+    })
+    await callPeer(code, '/leave', {}, undefined, headersA)
+    await callPeer(code, '/leave', {}, undefined, headersB)
+    await finalFile(plexo, sha256(origin.content))
+    expect(modelRequests).toBeGreaterThan(0)
+    expect((await plexo.api.getTogether())!.peers[0].bytes).toBe(MiB)
+  } finally {
+    model.closeAllConnections()
+    await new Promise<void>((resolve) => model.close(() => resolve()))
+  }
+})
+
 async function host(plexo: PlexoApp, url: string, expectedSha256?: string): Promise<string> {
   const state = await plexo.api.hostTogether({
     url,
