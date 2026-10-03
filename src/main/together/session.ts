@@ -38,7 +38,7 @@ type Block = {
   failures: number
   lease?: TogetherLease & { owner: string; expires: number; writing: boolean }
 }
-type Peer = TogetherPeer & { lease?: string; lastSeen: number }
+type Peer = TogetherPeer & { lastSeen: number; retryAfter?: number }
 type Assignment = { status: TogetherState['status']; lease: TogetherLease | null; bytes: number }
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error))
@@ -229,8 +229,13 @@ export class TogetherSession {
   private claim(owner: string, remaining: number): TogetherLease | null {
     const now = Date.now()
     for (const block of this.blocks) {
-      if (block.lease && !block.lease.writing && block.lease.expires <= now) block.lease = undefined
+      if (block.lease && !block.lease.writing && block.lease.expires <= now) {
+        const peer = this.peers.get(block.lease.owner)
+        if (peer) peer.retryAfter = now + LEASE_MS
+        block.lease = undefined
+      }
     }
+    if ((this.peers.get(owner)?.retryAfter ?? 0) > now) return null
     // One outstanding chunk per helper; repeated polls return that same assignment.
     const existing = this.blocks.find((block) => block.lease?.owner === owner)
     if (existing?.lease) return existing.lease
@@ -362,6 +367,21 @@ export class TogetherSession {
       } satisfies Assignment)
       return
     }
+    if (req.url === '/failed') {
+      const body = JSON.parse((await readBody(req, 1024)).toString())
+      if (typeof body.id !== 'string') throw new Error('Invalid chunk assignment')
+      const block = this.blocks.find(
+        (item) => item.lease && item.lease.id === body.id && item.lease.owner === peerId
+      )
+      // Idempotent: a delayed failure must never release a replacement lease or an active write.
+      if (block?.lease && !block.lease.writing) {
+        block.lease = undefined
+        peer.retryAfter = Date.now() + LEASE_MS
+        peer.status = 'connected'
+      }
+      json(res, { ok: true })
+      return
+    }
     if (req.url === '/chunk') {
       const block = this.blocks.find(
         (item) =>
@@ -436,9 +456,10 @@ export class TogetherSession {
     const signal = this.stop.signal
     const peer = this.helper!.peer
     const headers = { 'X-Plexo-Peer': peer }
+    let consecutiveFailures = 0
     try {
       while (!signal.aborted) {
-        const remaining = request.budgetBytes - this.state!.usedBytes
+        const remaining = Math.max(0, request.budgetBytes - this.state!.usedBytes)
         const assignment = await callPeer<Assignment>(
           request.code,
           '/lease',
@@ -465,21 +486,37 @@ export class TogetherSession {
         const lease = assignment.lease
         if (lease.end - lease.start + 1 > remaining)
           throw new Error('Assignment exceeds your remaining data budget')
-        const bytes = await fetchPiece(
-          this.state!.file,
-          lease,
-          () => this.networks.find(request.internetInterfaceId),
-          signal,
-          (count) => {
-            this.state!.usedBytes += count
-          }
-        )
-        await callPeer(request.code, '/chunk', bytes, signal, {
-          ...headers,
-          'X-Plexo-Lease': lease.id,
-          'X-Plexo-Sha256': hash(bytes)
-        })
-        this.state!.contributedBytes += bytes.length
+        try {
+          const bytes = await fetchPiece(
+            this.state!.file,
+            lease,
+            () => this.networks.find(request.internetInterfaceId),
+            signal,
+            (count) => {
+              this.state!.usedBytes += count
+            }
+          )
+          await callPeer(request.code, '/chunk', bytes, signal, {
+            ...headers,
+            'X-Plexo-Lease': lease.id,
+            'X-Plexo-Sha256': hash(bytes)
+          })
+          this.state!.contributedBytes += bytes.length
+          consecutiveFailures = 0
+        } catch (error) {
+          if (signal.aborted) throw error
+          // Release immediately rather than making the host wait for lease expiry.
+          // If the LAN itself is down, the lease deadline remains the fallback.
+          await callPeer(
+            request.code,
+            '/failed',
+            { id: lease.id },
+            AbortSignal.any([signal, AbortSignal.timeout(1500)]),
+            headers
+          ).catch(() => {})
+          if (++consecutiveFailures >= 3) throw error
+          await delay(500, undefined, { signal })
+        }
       }
     } finally {
       await callPeer(request.code, '/leave', {}, AbortSignal.timeout(1500), headers).catch(() => {})

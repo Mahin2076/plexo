@@ -243,3 +243,111 @@ test('Together: quitting an active host removes its unfinished file', async ({ p
   expect(await readdir(plexo.dirs.dest)).toEqual([])
   await expect(callPeer(code, '/session')).rejects.toThrow()
 })
+
+test('Together: failed phone chunk moves to another helper and stale messages cannot overwrite it', async ({
+  plexo,
+  serve
+}) => {
+  const origin = await serve({ size: 4 * MiB + 123, bytesPerSecond: MiB })
+  const code = await host(plexo, origin.url())
+  const first = await callPeer<{ peer: string }>(code, '/join', { name: 'Phone A' })
+  const second = await callPeer<{ peer: string }>(code, '/join', { name: 'Phone B' })
+  const a = { 'X-Plexo-Peer': first.peer }
+  const b = { 'X-Plexo-Peer': second.peer }
+  await plexo.api.startTogether()
+  const { lease } = await callPeer<{ lease: TogetherLease }>(
+    code,
+    '/lease',
+    { remaining: 10 * MiB },
+    undefined,
+    a
+  )
+  expect(lease).toBeTruthy()
+  // Another participant cannot release this phone's assignment.
+  await callPeer(code, '/failed', { id: lease.id }, undefined, b)
+  const unchanged = await callPeer<{ lease: TogetherLease }>(
+    code,
+    '/lease',
+    { remaining: 10 * MiB },
+    undefined,
+    a
+  )
+  expect(unchanged.lease.id).toBe(lease.id)
+  await callPeer(code, '/failed', { id: lease.id }, undefined, a)
+  const cooling = await callPeer<{ lease: TogetherLease | null }>(
+    code,
+    '/lease',
+    { remaining: 10 * MiB },
+    undefined,
+    a
+  )
+  expect(cooling.lease).toBeNull()
+  const replacement = await callPeer<{ lease: TogetherLease }>(
+    code,
+    '/lease',
+    { remaining: 10 * MiB },
+    undefined,
+    b
+  )
+  expect(replacement.lease.index).toBe(lease.index)
+  expect(replacement.lease.id).not.toBe(lease.id)
+  await callPeer(code, '/failed', { id: lease.id }, undefined, a)
+  const bytes = origin.content.subarray(lease.start, lease.end + 1)
+  await expect(
+    callPeer(code, '/chunk', bytes, undefined, {
+      ...a,
+      'X-Plexo-Lease': lease.id,
+      'X-Plexo-Sha256': hash(bytes)
+    })
+  ).rejects.toThrow('no longer needed')
+  await callPeer(code, '/chunk', bytes, undefined, {
+    ...b,
+    'X-Plexo-Lease': replacement.lease.id,
+    'X-Plexo-Sha256': hash(bytes)
+  })
+  await finalFile(plexo, sha256(origin.content))
+  const state = (await plexo.api.getTogether())!
+  expect(state.peers[0].bytes).toBe(0)
+  expect(state.peers[1].bytes).toBe(bytes.length)
+})
+
+test('Together: helper survives a transient source failure and host recovers its chunk', async ({
+  plexo,
+  serve
+}) => {
+  const origin = await serve({ size: 4 * MiB, bytesPerSecond: MiB })
+  const code = await host(plexo, origin.url())
+  let injected = false
+  // Host claims chunk zero synchronously on start. Fail the helper's first range once.
+  origin.setRule((request) => {
+    if (!injected && request.range?.start === MiB) {
+      injected = true
+      return { cutAfter: 16 * 1024 }
+    }
+    return 'ok'
+  })
+  const other = await makeDirs()
+  const helper = new PlexoApp(other.dirs)
+  try {
+    await helper.launch()
+    await helper.api.joinTogether({
+      code,
+      file: await helper.api.previewTogether(code),
+      name: 'Recovering helper',
+      internetInterfaceId: 'a',
+      budgetBytes: 10 * MiB
+    })
+    await plexo.api.startTogether()
+    await expect
+      .poll(async () => (await helper.api.getTogether())?.usedBytes ?? 0)
+      .toBeGreaterThan(0)
+    await finalFile(plexo, sha256(origin.content))
+    expect(injected).toBe(true)
+    await expect.poll(async () => (await helper.api.getTogether())?.status).toBe('completed')
+    expect((await helper.api.getTogether())!.usedBytes).toBe(16 * 1024)
+    expect(origin.log.filter((entry) => entry.range?.start === MiB).length).toBeGreaterThan(1)
+  } finally {
+    if (helper.alive) await helper.quit()
+    await other.dispose()
+  }
+})

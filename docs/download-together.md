@@ -43,3 +43,19 @@ npm run test:e2e:smoke
 ```
 
 Tests cover two real Electron windows (host/review/join/download), exact output hashes, contributions, chosen helper source address where available, budget exhaustion, graceful departure, abandoned leases, wrong publisher hashes, invalid tokens/browser origins, malformed/duplicate chunks, changed sources, stop/restart, quit cleanup and unsupported sources.
+
+## Native phone relay protocol (task 4)
+
+The target's existing LAN HTTP listener can accept chunks from native phone clients as well as Plexo desktop helpers. A phone app is not included in this repository yet. The phone client must choose its own source network; Plexo cannot force a phone to use cellular data while keeping a local Wi-Fi route. Browser-origin requests remain rejected.
+
+Parse the join code as `plexo://HOST:PORT/TOKEN` and connect to `http://HOST:PORT`. Send `Authorization: Bearer TOKEN` on every request. All responses are JSON; non-200 responses contain an `error` string. Do not log or publish the token.
+
+1. `GET /session`: review the file metadata with the user, including the source URL, total bytes and optional publisher checksum.
+2. `POST /join` with JSON `{ "name": "My phone" }`: receive a `peer` credential. Send it as `X-Plexo-Peer` on subsequent requests.
+3. `POST /lease` with JSON `{ "remaining": 10485760 }`: report remaining source-payload budget in bytes. Receive `{ status, lease, bytes }`. A lease contains `id`, `index`, `start` and inclusive `end`. Poll with a short delay when the lease is null; stop on completed, stopped or error status. Repeated polls do not extend a lease.
+4. Fetch the assigned source range using `Range: bytes=START-END`, `If-Match: ETAG` and `Accept-Encoding: identity`. Require HTTP 206, the exact Content-Range and ETag, and the exact byte count. Count failed source payload toward the user's allowance too.
+5. `POST /chunk` with the raw bytes, exact `Content-Length`, `X-Plexo-Lease: ID` and `X-Plexo-Sha256: HEX_DIGEST`. A successful response means the target wrote the chunk at its assigned offset. The target rejects expired and duplicate uploads and only publishes after every piece is written and final verification passes.
+6. If fetching or uploading fails, `POST /failed` with JSON `{ "id": "LEASE_ID" }`. The target releases the matching lease immediately and gives that helper a 45-second cooldown so another participant can claim the work. Failure reports are idempotent and cannot release another participant's lease or interrupt a write. Desktop helpers recover from up to two consecutive chunk failures and leave after the third; a successful chunk resets the counter.
+7. `POST /leave` with JSON `{}` when done helping or canceled. This immediately releases unfinished assignments. If the phone disappears without reporting failure, its lease expires after 45 seconds. Expired helpers also receive a cooldown when the expired lease is reclaimed, preventing a slow participant from immediately taking it back.
+
+Keep one chunk in memory at a time (at most 1 MiB). Source and relay requests have 30-second deadlines in the desktop client. If an upload response is lost, a later failure report cannot undo an already accepted chunk; contribution accounting remains authoritative on the host. Plain HTTP is for trusted local networks only. Real phone testing and a native phone UI are still required before claiming mobile end-to-end support.
